@@ -1,0 +1,132 @@
+DESCRIPTION:
+Smart Dustbin is an automatic dustbin that detects a person’s hand or garbage near the mouth and automatically opens the lid (servo) and then closes after a short delay. It uses an ultrasonic distance sensor (HC-SR04) to measure distance. Optionally LED and buzzer indicate action. Useful contactless garbage disposal
+CODING :
+/* Smart Dustbin - Auto Lid with HC-SR04 + Servo
+   Arduino Uno example
+   Connections:
+     HC-SR04 Trig -> D9
+     HC-SR04 Echo -> D10
+     Servo signal  -> D6
+     Buzzer (opt)  -> D7
+     LED (opt)     -> D8
+*/
+
+#include <Servo.h>
+
+const int trigPin = 9;
+const int echoPin = 10;
+const int servoPin = 6;
+const int buzzerPin = 7; // optional
+const int ledPin = 8;    // optional
+
+Servo lid;
+
+const long DIST_THRESHOLD_CM = 20; // open if object closer than this (cm)
+const unsigned long MIN_OPEN_MS = 1500; // minimum time to keep lid open (ms)
+const unsigned long SENSOR_INTERVAL_MS = 120; // measurement interval
+const unsigned long DEBOUNCE_MS = 150; // require reading stable for this long
+
+// Servo angles (tweak to suit your lid geometry)
+const int CLOSED_ANGLE = 10; // fully closed (deg)
+const int OPEN_ANGLE = 90;   // open angle (deg)
+
+unsigned long lastMeasurement = 0;
+unsigned long lastOpenTime = 0;
+bool lidIsOpen = false;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(ledPin, OUTPUT);
+
+  lid.attach(servoPin);
+  lid.write(CLOSED_ANGLE); // ensure closed at start
+
+  digitalWrite(buzzerPin, LOW);
+  digitalWrite(ledPin, LOW);
+
+  delay(500);
+  Serial.println("Smart Dustbin Ready");
+}
+
+long readDistanceCM() {
+  // Send trigger pulse
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  // Read echo pulse
+  long duration = pulseIn(echoPin, HIGH, 30000); // timeout 30ms
+  if (duration == 0) return 9999; // no reading
+  long distanceCm = duration / 58; // approximate
+  return distanceCm;
+}
+
+void beep(int times = 1, int msOn = 60, int msOff = 60) {
+  for (int i=0;i<times;i++) {
+    digitalWrite(buzzerPin, HIGH);
+    delay(msOn);
+    digitalWrite(buzzerPin, LOW);
+    delay(msOff);
+  }
+}
+
+void openLid() {
+  lid.write(OPEN_ANGLE);
+  lidIsOpen = true;
+  lastOpenTime = millis();
+  digitalWrite(ledPin, HIGH);
+  beep(1,40,40);
+  Serial.println("Lid opened");
+}
+
+void closeLid() {
+  lid.write(CLOSED_ANGLE);
+  lidIsOpen = false;
+  digitalWrite(ledPin, LOW);
+  beep(1,20,40);
+  Serial.println("Lid closed");
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastMeasurement < SENSOR_INTERVAL_MS) return;
+  lastMeasurement = now;
+
+  long d = readDistanceCM();
+  Serial.print("Dist: ");
+  Serial.print(d);
+  Serial.println(" cm");
+
+  static unsigned long nearSince = 0;
+  static bool wasNear = false;
+
+  bool isNear = (d > 0 && d < DIST_THRESHOLD_CM);
+
+  if (isNear && !wasNear) {
+    // object just detected — start debounce timer
+    nearSince = now;
+  }
+
+  if (isNear && !lidIsOpen && (now - nearSince) >= DEBOUNCE_MS) {
+    // stable near -> open
+    openLid();
+  }
+
+  // If lid is open: keep it open while object near OR until MIN_OPEN_MS elapsed
+  if (lidIsOpen) {
+    if (isNear) {
+      lastOpenTime = now; // refresh keep-open timer while object is present
+    }
+    if ((now - lastOpenTime) > MIN_OPEN_MS && !isNear) {
+      // no object & minimum open time passed -> close
+      closeLid();
+    }
+  }
+
+  wasNear = isNear;
+}
